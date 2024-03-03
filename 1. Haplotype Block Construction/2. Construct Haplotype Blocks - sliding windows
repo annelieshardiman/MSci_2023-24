@@ -1,0 +1,149 @@
+# This sbatch script is intended to be ran as a loop. All chromosomes must be specified as the slurm array task ID when running the code to fit the animal studied. 
+# (e.g. sbatch --array=1-29 file.sbatch for cattle)
+# This file is split into a number of sections by '----' and each section should be ran as a seperate script
+
+
+
+---- 2. Construct Haplotype Blocks ----
+
+
+
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID 
+wrkdir=[your_directory]/chr$chr
+
+cd $wrkdir
+infile=$wrkdir/chr$chr.snplist.txt 
+
+# Here, WINSIZE refers to the number of SNPs you want to include in your sliding window and to create your haplotypes, the example here is 10
+# SLIDING=1 means that the window will slide by one SNP across the chromosome, create a haplotype block, and then slide up again by one.
+declare -i WINSIZE=10
+declare -i SLIDING=1
+NELEM="$(wc -l $infile | awk '{print $1}')"
+NSLIDES=$(((NELEM - WINSIZE) / SLIDING))
+
+# This loop creates a single file containing all the haplotypes constructed using the sliding windows
+for ((i=0; i<=NSLIDES;i++)); do
+        START=$((1+$i*SLIDING))
+        END=$((START+(WINSIZE-1))) # not considering the last 3 or less genotypes
+#       echo $TMPV $START $END
+        awk -v start="$START" -v end="$END" 'NR>=start && NR<=end' $infile | tr '\n' ' ' | awk '{print $0 "\t"}' >> chr$chr.haplotypelist.tmp.txt
+done
+
+# As all haplotypes have a fixed window size of 10 SNPs, we can split the file every 10 rows to generate the list of SNPs designated to each haplotype block. These commands also designate a number starting from 0000 to a max of 9999 in order of their position along the chromsome
+sed -i 's/ /\n/g' chr$chr.haplotypelist.tmp.txt
+grep "\S" chr$chr.haplotypelist.tmp.txt > chr$chr.haplotypelist.txt
+rm chr$chr.haplotypelist.tmp.txt
+split -l 10 -a 4 -d chr$chr.haplotypelist.txt chr$chr.haplotype_block_
+rm chr$chr.haplotypelist.txt
+
+echo "Haplotype files complete "
+
+# This creates a list of all the haplotype block names (i.e., chr1.haplotype_block_0001) in the chromosome folder to be used in later scripts
+ls --color=auto -alF $wrkdir | awk '{print $9}' | grep chr$chr.haplotype_ > $wrkdir/filenames.txt
+
+echo "List of all files generated "
+
+
+
+---- 3. Extract Genotype Data and Identify Haplotypes in the Population for Each Haplotype Block ----
+
+
+
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID
+wkdir=[path to directory containing your genotype files in VCF format]
+outdir=[path to directory containing the output for haplotype analysis per chromosome]
+files=$outdir/filenames.txt
+#
+# Load modules
+module load BCFtools
+#
+echo "Running [script name] "
+
+echo "Extracting genotypes for chr"$chr" haplotype blocks "
+
+# Extract genotype calls for all haplotype blocks
+for f in $(cat $files)
+do
+ chr=$SLURM_ARRAY_TASK_ID
+ bcftools view -O v -o $outdir/$f.vcf -T $outdir/$f $wkdir/[Genotype VCF file for the chromosome determined by the array]
+done
+
+cd $outdir
+# Split all haplotypes by their maternal and paternal chromosomes (e.g., 0|1 0|0 1|1 --> 001 101)
+# Need to change the 'WINSIZE' to your window size 
+echo "Transposing haplotype files "
+
+for f in $(cat $files)
+do
+cut -f[WINSIZE]- $f.vcf | sed '/^#/d' |  awk '
+ {
+     for (i=1; i<=NF; i++)  {
+         a[NR,i] = $i
+     }
+ }
+ NF>p { p = NF }
+ END {
+     for(j=1; j<=p; j++) {
+         str=a[1,j]
+         for(i=2; i<=NR; i++){
+             str=str" "a[i,j];
+         }
+         print str
+     }
+ }' > transposed.$f.txt
+
+done
+
+echo "Extracting maternal and paternal haplotypes "
+
+# The code here worksfor the 10 SNP window size - if using a different window size, the 2nd and 3rd rows of the loop (starting with 'awk') need to be changed, see below
+for f in $(cat $files)
+do
+ sed -i 's/|/ /g' transposed.$f.txt
+ awk '{print $1, $2, $4, $6, $8, $10, $12, $14, $16, $18, $20}' transposed.$f.txt | awk '{printf "%s ", $1;for(i=2;i<NF;i++){printf $i};printf $NF"\n"}' > $f.hap1.txt
+ # If using a different window size such as 15 SNP, then awk '{print $1, $2, $4, $6, $8, $10, $12, $14, $16, $18, $20, $22, $24, $26, $28, $30}' transposed.$f.txt | awk '{printf "%s ", $1;for(i=2;i<NF;i++){printf $i};printf $NF"\n"}' > $f.hap1.txt
+ # Need to add more columns printed in awk to match the number of SNPs - the same goes for the line below
+ awk '{print $1, $3, $5, $7, $9, $11, $13, $15, $17, $19, $21}' transposed.$f.txt | awk '{printf "%s ", $1;for(i=2;i<NF;i++){printf $i};printf $NF"\n"}' > $f.hap2.txt
+ cat $f.hap1.txt $f.hap2.txt | sort > combined.$f.txt
+ sort -k2 -n combined.$f.txt | awk '{print $2}' | uniq -c > $f.counts.txt
+ awk '{print "'$f'", $2, $1}' $f.counts.txt | sed -e '1i\HapBlockID Haplotype Count' > $f.counts.tmp.txt
+ awk '$0=$0"\t"(NR==1?"Haplotype_frequency":$3/143516)' $f.counts.tmp.txt > $f.freq.tmp.txt
+ awk '$0=$0" "(NR==1?"Expected_homozygous_frequency":$4*$4)' $f.freq.tmp.txt > $f.freq.txt
+ sed -i 's/ /\t/g' $f.freq.txt
+ join $f.hap1.txt $f.hap2.txt | sed -e '1i\ID Haplotype1 Haplotype2' > joined.$f.txt
+ sed -i 's/\t/ /g' joined.$f.txt
+
+done
+
+echo "Deleting files "
+
+for f in $(cat $files)
+do
+ rm transposed.$f.txt
+ rm combined.$f.txt
+ rm $f.counts.txt
+ rm $f.freq.tmp.txt
+ rm $f.hap1.txt
+ rm $f.hap2.txt
+ rm $f.counts.tmp.txt
+
+done
+
+echo "Complete"
+
+
+sitions.txt
+
+echo "Merging with results file"
+
+join -j 1 chr$chr.candidate_haplotypes.txt haplotype_positions.txt > chr$chr.haplotype_results.with_positions.txt
+awk '{print '$chr', $1, $9, $10}' chr$chr.haplotype_results.with_positions.txt > chr$chr.haplotype_results_for_R.tmp.txt
+#rm haplotype_positions.txt
+
+awk '($3 != "0.0")' chr$chr.haplotype_results_for_R.tmp.txt | awk '$4!=""' > chr$chr.haplotype_results_for_R.txt
+
+echo "Done "
+echo "Results written to chr"$chr".haplotype_results_for_R.txt"
+
