@@ -1,0 +1,64 @@
+# This sbatch script is intended to be ran as a loop. All chromosomes must be specified as the slurm array task ID when running the code to fit the animal studied. 
+# (e.g. sbatch --array=1-29 file.sbatch for cattle)
+# This is a continuation of the 2. Construct Haplotype Blocks scripts, hence the '4.' in the following script name
+
+---- 4. Compare Expected and Observed Number of Homozygotes ----
+
+
+# This script uses two additional python scripts found in the main directory of the GitHub Repository (find_homozygous_haplotypes.py and compare_expected_and_observed_freqs.py)
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID
+wrkdir=[path to directory containing haplotypes]
+files=$wrkdir/filenames.txt
+path_to_python_scripts=[path to directory containing the two python scripts]
+#
+# Load modules
+module load Python/3.9.9-gimkl-2020a
+#
+# Note that if population size changes, this will have to be changed in find_homozygous_haplotypes.py and purebred_compare_expected_and_observed_freqs.py
+echo "Running [script name]"
+echo "============================================="
+echo "Running for population size of [number of individuals in genotype file] cattle"
+echo "If this is incorrect adjust in python scripts"
+echo "============================================="
+#
+cd $wrkdir
+#
+echo "Calculating homozygous haplotype frequencies"
+
+#Note that find_homozygous_haplotypes.py takes 3 arguments:
+#argument 1 =path to working directory 
+#argument 2 =file containing haplotype information e.g., joined.chr26.haplotype_block_0867.txt
+#argument 3 = file to write out e.g., homohapinfo.chr26.haplotype_block_0867.txt
+
+for f in $(cat $files)
+do
+ infile=joined.$f.txt
+ outfile=homohapinfo.$f.txt
+ python $path_to_python_scripts/find_homozygous_haplotypes.py $wrkdir $infile $outfile
+done
+
+echo "Completed calculating homozygous haplotype frequencies"
+echo "Finding haplotypes that may be depleted in their homozygous state "
+
+#Note that compare_expected_and_observed_freqs.py takes 4 arguments:
+#argument 1 = path to working directory
+#argument 2 = file containing haplotype frequency information e.g. chr26.haplotype_block_0867.freq.txt
+#argument 3 = file containging observed haplotype information e.g. homohapinfo.chr26.haplotype_block_0867.txt
+#argument 4 = output files e.g. chr26.haplotype_block_0867.results.txt
+
+for f in $(cat $files)
+do
+
+ hapfrq=$f.freq.txt
+ homozygous_hapinfo=homohapinfo.$f.txt
+ output=$f.results.txt
+
+ python $path_to_python_scripts/compare_expected_and_observed_freqs.py $wrkdir $hapfrq $homozygous_hapinfo $output
+
+done
+
+echo "Complete "
+
+awk 'FNR>1 || NR==1' *.results.txt > chr$chr.candidate_haplotypes.txt
+
