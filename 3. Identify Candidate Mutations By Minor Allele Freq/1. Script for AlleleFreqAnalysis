@@ -1,0 +1,97 @@
+
+echo "Moving to work directory"
+
+path_to_python_scripts=/data/seq/anhar1/Allele_freq_analysis/20x_depth_analysis/10SNP
+
+#Load variables
+
+
+while read -r chr blocknum start end; do
+
+wkdir=/data/seq/anhar1/Allele_freq_analysis/20x_depth_analysis/10SNP/chr${chr}_$blocknum
+cd $wkdir
+
+#Getting --keep files ready for plink
+#cat chr$chr.haplotype$blocknum.cases.aks chr$chr.haplotype$blocknum.cases.seq.aks | sort | uniq -c | awk '{print $2, $2}' > "$wkdir/chr$chr.haplotype$blocknum.cases.plink.aks"
+
+awk '{print $1, $1}' chr$chr.haplotype$blocknum.cases.aks > "$wkdir/chr$chr.haplotype$blocknum.cases.plink.aks"
+
+
+echo "Getting minor allele frequencies for population, cases and control groups"
+
+#use plink to get allele frequencies for each group
+plink --cow --bfile /data/seq/anhar1/Allele_freq_analysis/20x_depth_analysis/chr$chr.20x_GMK50kv1_animals --chr chr$chr --from-bp $start --to-bp $end --keep chr$chr.haplotype$blocknum.cases.plink.aks --make-bed --freq --out chr$chr.hapblock$blocknum.AFA_cases || continue
+
+plink --cow --bfile /data/seq/anhar1/Allele_freq_analysis/20x_depth_analysis/chr$chr.20x_GMK50kv1_animals --chr chr$chr --from-bp $start --to-bp $end --remove chr$chr.haplotype$blocknum.cases.plink.aks --make-bed --freq --out chr$chr.hapblock$blocknum.AFA_control
+
+#plink --cow --bfile /data/seq/anhar1/Allele_freq_analysis/20x_depth_analysis/chr$chr.WGS_20x_depth_animals --chr chr$chr --from-bp $start --to-bp $end --make-bed --freq --out chr$chr.hapblock$blocknum.AFA_20xPop
+
+#plink --cow --bfile /data/seq/swjiv0/haplotype_analysis/Haplotype_Analysis_04-22_ImputedGMK50kv1/investigate_candidate_haplotypes/sequenced_cattle_with_GMK50k_haplotype_info --chr chr$chr --from-bp $start --to-bp $end --make-bed --freq --out chr$chr.hapblock$blocknum.AFA_TotalPop
+
+
+echo "Finished running plink - setting up frequency results file"
+
+#create summary file
+echo $'CHR\tSNP\tMAF_cases\tMAF_control' > chr$chr.hapblock$blocknum.AFA_results.txt
+
+#Record this information as variables
+awk 'NR>1 {print $1}' chr$chr.hapblock$blocknum.AFA_cases.frq > CHR.temp.txt
+awk 'NR>1 {print $2}' chr$chr.hapblock$blocknum.AFA_cases.frq > SNP.temp.txt
+#awk 'NR>1 {print $5}' chr$chr.hapblock$blocknum.AFA_TotalPop.frq > MAF_TP.temp.txt
+#awk 'NR>1 {print $5}' chr$chr.hapblock$blocknum.AFA_20xPop.frq > 20x.temp.txt
+awk 'NR>1 {print $5}' chr$chr.hapblock$blocknum.AFA_cases.frq > CASES.temp.txt
+awk 'NR>1 {print $5}' chr$chr.hapblock$blocknum.AFA_control.frq > CONTROL.temp.txt
+
+#reading results of MAF to summary file
+paste CHR.temp.txt SNP.temp.txt CASES.temp.txt CONTROL.temp.txt >> chr$chr.hapblock$blocknum.AFA_results.txt
+
+
+echo "Run python to find alleles enriched in cases"
+
+results=chr$chr.hapblock$blocknum.AFA_results.txt
+outfile=chr$chr.hapblock$blocknum.AFA_results_filtered.txt
+python3 $path_to_python_scripts/identify_candidate_alleles.py $wkdir $results $outfile
+
+echo "Python script completed running"
+
+awk '{print $NF, $0}' $outfile | sort -nr | cut -f2- > chr$chr.hapblock$blocknum.AFA_results.sorted.txt
+
+#Remove temp files
+rm CHR.temp.txt
+rm SNP.temp.txt
+#rm MAF_TP.temp.txt
+#rm 20x.temp.txt
+rm CASES.temp.txt
+rm CONTROL.temp.txt
+
+echo "Completed running allele frequency analysis for chr$chr haplotype block $blocknum"
+
+done < HF10SNP_MH_AFA.info.txt
+
+echo "Completed"
+
+
+----
+
+
+
+while read -r chr blocknum start end; do
+
+threshold=10
+wkdir=/data/seq/anhar1/Allele_freq_analysis/20x_depth_analysis/10SNP/chr${chr}_$blocknum
+cd $wkdir
+
+echo "Moving to chromosome ${chr} ${blocknum} folder"
+
+awk '$2 > "0.4" && $2 < "0.6"' chr${chr}.hapblock${blocknum}.AFA_results.sorted.txt | awk -v threshold=$threshold '$4 > threshold' | awk '{print $1}' | sort > chr${chr}.combined_param.snps_for_VEP.txt
+
+echo "finished finding enriched snps"
+
+for f in $(cat chr${chr}.combined_param.snps_for_VEP.txt); do
+        grep $f chr${chr}.hapblock${blocknum}.AFA_control.bim | awk '{print $1,$4,".",$5,$6,".",".","."}' >> chr${chr}.combined_param.vep.info.txt;
+done
+
+echo "finished getting snps for VEP analysis"
+
+done < HF10SNP_MH_AFA.info.txt
+
