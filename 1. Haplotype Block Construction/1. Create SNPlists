@@ -1,0 +1,14 @@
+# This sbatch script is intended to be ran as a loop. All chromosomes must be specified as the slurm array task ID when running the code to fit the animal studied. 
+# (e.g. sbatch --array=1-29 file.sbatch for cattle)
+
+# Setting up variables
+chr=$SLURM_ARRAY_TASK_ID
+cd [directory for analysis e.g. /
+indir= [directory containing genotypes e.g. /Genos]
+  ## These two lines create a seperate directory for each chromosome during the analysis, as specified by the slurm array task ID
+outdir=chr$chr
+mkdir -p $outdir
+
+# Create snp list for chromosome
+echo "Creating SNP list for chr"$chr" "
+zcat $indir/chr$chr.imputed2GMK50k.vcf.gz | awk '{print $1 "\t" $2}' | sed '/^#/d' > $outdir/chr$chr.snplist.txt
