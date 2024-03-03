@@ -1,0 +1,84 @@
+# This script is used to determine whether haplotypes are depleted in the trios, i.e., carrier x carrier matings
+# In the working directory, you need to have the joined.chr$chr.haplotype_block_$blocknum.txt files for all depleted haplotypes you wish to assess in this analysis - this file was created in 1. Haplotype Depletion Analysis
+
+wkdir=[path to working directory]
+path_to_python_scripts=[path to directory containing the python script for the trios analysis]
+
+# Set up working environment
+cd $wkdir
+mkdir -p candidate_haplotypes
+
+echo "Made folder called 'candidate_haplotypes'"
+
+# Load modules
+#module load Python/3.9.9-gimkl-2020a
+
+echo "Module loaded"
+
+#create summary file
+echo "Haplotype_block Haplotype Num_carriers Num_carrier_matings Num_hom_hap Num_het_offspring" > $wkdir/candidate_haplotypes/Trios_10SNP.results.txt
+
+# Load variables
+while read -r chr blocknum haplotype; do
+
+cd $wkdir
+hap_block=chr$chr/joined.chr$chr.haplotype_block_$blocknum.txt
+echo "Variables set"
+
+# Find all carriers
+grep $haplotype $hap_block > "$wkdir/candidate_haplotypes/chr$chr.haplotype_block_$blocknum.carriers.txt"
+awk '{print $1}' $wkdir/candidate_haplotypes/chr$chr.haplotype_block_$blocknum.carriers.txt > "$wkdir/candidate_haplotypes/chr$chr.haplotype_block_$blocknum.carriers.aks"
+
+echo "Grepped "$haplotype" from "$hap_block""
+
+# Find carrier x carrier matings
+#Note that find_carrier_matings.py takes 4 arguments:
+#argument 1 =path to working directory e.g. /nesi/nobackup/nesi00187/swjiv0/Haplotype_Analysis_09-22_ImputedGMK50kv1/Trios/10SNP/chr1
+#argument 2 =pedigree file e.g. trios_imputed_to_GMK50k.pedigree
+#argument 3 =file with carrier animal keys e.g. chr4.haplotype_block_1272.carriers.aks
+#argument 4 =outfile e.g. chr4.haplotype_block_1272.carrier_matings.txt
+
+pedfile=$path_to_python_scripts/trios_imputed_to_GMK50k.pedigree
+aksfile=chr$chr.haplotype_block_$blocknum.carriers.aks
+outfile=chr$chr.haplotype_block_$blocknum.carrier_matings.txt
+
+echo "Run python to find carrier x carrier matings"
+
+python3 $path_to_python_scripts/find_homozygous_haplotypes.py $wkdir/candidate_haplotypes $pedfile $aksfile $outfile
+
+echo "Python script completed running"
+
+# Change working directory
+cd $wkdir/candidate_haplotypes
+
+echo "Finding number of offspring from carrier x carrier matings"
+
+# Find number of offspring from carrier x carrier matings
+awk 'FNR>1 {print $2}' $outfile > "$wkdir/candidate_haplotypes/chr$chr.haplotype_block_$blocknum.offspring.aks"
+grep -F -f chr$chr.haplotype_block_$blocknum.offspring.aks $wkdir/$hap_block | grep $haplotype > $wkdir/candidate_haplotypes/chr$chr.haplotype_block_$blocknum.offspring.txt || continue
+grep -F -f chr$chr.haplotype_block_$blocknum.offspring.aks $wkdir/$hap_block > $wkdir/candidate_haplotypes/chr$chr.haplotype_block_$blocknum.total_offspring.txt || continue
+echo "Recording results in chr"$chr"/candidate_haplotypes/Trios_10SNP.results.txt"
+
+# Record this information in a seperate file
+num_carriers=`wc -l chr$chr.haplotype_block_$blocknum.carriers.aks | awk '{print $1}'`
+num_matings=`sed '1d' $outfile | wc -l | awk '{print $1}'`
+num_homs=`awk '{if($2 == $3) print}' chr$chr.haplotype_block_$blocknum.offspring.txt | wc -l | awk '{print $1}'`
+num_het=`awk '{if($2 != $3) print}' chr$chr.haplotype_block_$blocknum.offspring.txt | wc -l | awk '{print $1}'`
+
+#touch candidate_mating_counts.txt
+echo ""chr$chr.haplotype_block_$blocknum.txt" "$haplotype" "$num_carriers" "$num_matings" "$num_homs" "$num_het"" >> Trios_10SNP.results.txt
+
+mv chr$chr* ../chr$chr
+
+cd $wkdir
+
+echo "Moving to next haplotype"
+
+done < Holstein_10SNP_significant_blocks.txt
+
+input=Trios_10SNP.results.txt
+output=Trios_10SNP.ChiSq_info.with_LRT.txt
+
+python3 $path_to_python_scripts/calculate_LRT.py $wkdir/candidate_haplotypes $input $output
+
+echo "Completed finding Carrier x Carrier matings"
