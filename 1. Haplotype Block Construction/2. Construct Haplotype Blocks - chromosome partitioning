@@ -1,0 +1,151 @@
+# This sbatch script is intended to be ran as a loop. All chromosomes must be specified as the slurm array task ID when running the code to fit the animal studied. 
+# (e.g. sbatch --array=1-29 file.sbatch for cattle)
+# This file is split into a number of sections by '----' and each section should be ran as a seperate script
+
+
+
+---- 2. Construct Haplotype Blocks ----
+
+
+
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID
+wrkdir=/nesi/nobackup/nesi00187/anhar1/Haplotype_depletion_analysis/Holstein_500kb/chr$chr
+infile=chr$chr.snplist.txt
+
+cd $wrkdir
+
+last1=$( tail -n1 $infile | awk -F "\t" '{print $2}' )
+
+declare -i SLIDING=1
+declare -i last=${last1}
+a=1
+
+echo "Splitting up markers by distance along chromosome"
+
+# This loop creates haplotypes with a maximum size of 500kb, to adjust the window size, please replace '499999' with 1-[max window size]
+for i in $(cat $infile); do
+        START=$i
+        END=$((START+499999))
+        awk -v start="$START" -v end="$END" -F "\t" '{if ( $2 >= start && $2 <= end )  print $0 }' $infile | less >> chr$chr.haplotype_block_$i
+        new=$(printf "chr$chr.haplotype_block_%04d" "$a") # pad to length of 4
+        mv -i -- "chr$chr.haplotype_block_$i" "$new"
+        let a=a+1
+done
+
+echo "Deleting empty files"
+rm -f *[13579]
+find . -type f -empty -print -delete
+
+rm filenames.txt
+echo "Making filenames"
+
+ls --color=auto -alF $wrkdir | awk '{print $9}' | grep chr$chr.haplotype_ >> $wrkdir/filenames.txt
+
+echo "Completed"
+
+
+
+---- 3. Extract Genotypes for Haplotype Blocks ----
+
+
+
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID
+wkdir=/[path to directory containing genotype VCF files]
+outdir=[path to working directory]
+files=$outdir/filenames.txt
+#
+# Load modules
+module load BCFtools
+#
+echo "Running extract_haplotypes_HF3.sbatch "
+echo "Extracting genotypes for chr"$chr" haplotype blocks "
+
+for f in $(cat $files)
+do
+
+ chr=$SLURM_ARRAY_TASK_ID
+ bcftools view -O v -o $outdir/$f.vcf -T $outdir/$f $wkdir/chr$chr.imputed2GMK50k.vcf.gz
+
+done
+
+
+
+---- 3.1 Transpose Haplotypes ----
+
+
+
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID
+wkdir=/nesi/nobackup/nesi00187/anhar1/Haplotype_depletion_analysis/Holstein_500kb/Genos_HF
+outdir=/nesi/nobackup/nesi00187/anhar1/Haplotype_depletion_analysis/Holstein_500kb/chr$chr
+files=$outdir/filenames.txt
+#
+# Load modules
+module load BCFtools
+#
+echo "Running extract_haplotypes_HF3.sbatch "
+
+cd $outdir
+
+echo "Transposing haplotype files "
+
+for f in $(cat $files); do
+  snps1="$(wc -l $f | awk '{print $1}')"
+  declare -i snps=${snps1}
+
+cut -f ${snps}- $f.vcf | sed '/^#/d' |  awk '
+ {
+     for (i=1; i<=NF; i++)  {
+         a[NR,i] = $i
+     }
+ }
+ NF>p { p = NF }
+ END {
+     for(j=1; j<=p; j++) {
+         str=a[1,j]
+         for(i=2; i<=NR; i++){
+             str=str" "a[i,j];
+         }
+         print str
+     }
+ }' > transposed.$f.txt
+sed -i '1,5d' transposed.$f.txt
+
+done
+
+echo "Extracting maternal and paternal haplotypes "
+
+for f in $(cat $files)
+do
+ sed -i 's/|/ /g' transposed.$f.txt
+ awk '{printf "%s ", $1; for (i=1;i<=NF;i+=2) $i="" }1' transposed.$f.txt | awk '{printf "%s ", $1;for(i=2;i<NF;i++){printf $i};printf $NF"\n"}' > $f.hap1.txt
+ awk '{ for (i=2;i<=NF;i+=2) $i=""; printf "%s ", $i }1' transposed.$f.txt | awk '{printf "%s ", $1;for(i=2;i<NF;i++){printf $i};printf $NF"\n"}' > $f.hap2.txt
+ cat $f.hap1.txt $f.hap2.txt | sort > combined.$f.txt
+ sort -k2 -n combined.$f.txt | awk '{print $2}' | uniq -c > $f.counts.txt
+ awk '{print "'$f'", $2, $1}' $f.counts.txt | sed -e '1i\HapBlockID Haplotype Count' > $f.counts.tmp.txt
+ awk '$0=$0"\t"(NR==1?"Haplotype_frequency":$3/85788)' $f.counts.tmp.txt > $f.freq.tmp.txt
+ awk '$0=$0" "(NR==1?"Expected_homozygous_frequency":$4*$4)' $f.freq.tmp.txt > $f.freq.txt
+ sed -i 's/ /\t/g' $f.freq.txt
+ join $f.hap1.txt $f.hap2.txt | sed -e '1i\ID Haplotype1 Haplotype2' > joined.$f.txt
+ sed -i 's/\t/ /g' joined.$f.txt
+
+done
+
+echo "Deleting files "
+
+for f in $(cat $files)
+do
+ rm transposed.$f.txt
+ rm combined.$f.txt
+ rm $f.counts.txt
+ rm $f.freq.tmp.txt
+ rm $f.hap1.txt
+ rm $f.hap2.txt
+ rm $f.counts.tmp.txt
+
+done
+
+echo "Complete "
+
