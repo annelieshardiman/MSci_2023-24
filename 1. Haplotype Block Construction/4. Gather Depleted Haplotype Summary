@@ -1,0 +1,31 @@
+# This sbatch script is intended to be ran as a loop. All chromosomes must be specified as the slurm array task ID when running the code to fit the animal studied. 
+# (e.g. sbatch --array=1-29 file.sbatch for cattle)
+# This is a continuation of the 3. Compare Expected and Observed Homozygotes, hence the '5.' in the following script name
+# The output of this a summary of all haplotypes that are depleted in the population with their Binomal probability p-value, number of observed, number of expected and haplotype frequencies.
+
+
+# ---- 5. Haplotype Summary Information ---- 
+
+
+# Set variables
+chr=$SLURM_ARRAY_TASK_ID
+wrkdir=[path to working directory containing haplotype info]
+files=$wrkdir/filenames.txt
+
+cd $wrkdir
+
+echo "Running [script name]"
+
+#rm temp.txt
+touch temp.txt
+
+echo "Creating haplotype positions for plotting"
+
+for f in $(cat $files)
+do
+
+ echo ""$f""
+ awk ' { a[i++]=$2; } END { x=int((i+1)/2); if (x < (i+1)/2) print (a[x-1]+a[x])/2; else print a[x-1]; }' $f
+
+done >> chr$chr.haplotype_information.txt
+
